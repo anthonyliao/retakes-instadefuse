@@ -30,7 +30,8 @@ public Plugin myinfo =
 
 public void OnPluginStart()
 {
-    LoadTranslations("instadefuse.phrases");
+    PrintToServer("%s Plugin loaded", MESSAGE_PREFIX);
+    PrintToChatAll("%s Plugin loaded", MESSAGE_PREFIX);
 
     HookEvent("bomb_begindefuse", Event_BombBeginDefuse, EventHookMode_Post);
     HookEvent("bomb_planted", Event_BombPlanted, EventHookMode_Pre);
@@ -41,8 +42,8 @@ public void OnPluginStart()
     HookEvent("round_start", Event_RoundStart, EventHookMode_PostNoCopy);
 
     hInfernoDuration = CreateConVar("instant_defuse_inferno_duration", "7.0", "If Valve ever changed the duration of molotov, this cvar should change with it.");
-    hEndIfTooLate = CreateConVar("instant_defuse_end_if_too_late", "1.0", "End the round if too late.", _, true, 0.0, true, 1.0);
-    hDefuseIfTime = CreateConVar("instant_defuse_if_time", "1.0", "Instant defuse if there is time to do so.", _, true, 0.0, true, 1.0);
+    hEndIfTooLate = CreateConVar("instant_defuse_end_if_too_late", "0", "End the round if too late.");
+    hDefuseIfTime = CreateConVar("instant_defuse_if_time", "1", "Instant defuse if there is time to do so.");
 
     // Added the forwards to allow other plugins to call this one.
     fw_OnInstantDefusePre = CreateGlobalForward("InstantDefuse_OnInstantDefusePre", ET_Event, Param_Cell, Param_Cell);
@@ -56,156 +57,131 @@ public void OnMapStart()
 
 public Action Event_RoundStart(Handle event, const char[] name, bool dontBroadcast)
 {
-	g_bAlreadyComplete = false;
-	g_bWouldMakeIt = false;
+    g_bAlreadyComplete = false;
+    g_bWouldMakeIt = false;
 
-	if (hTimer_MolotovThreatEnd != null)
-	{
-		delete hTimer_MolotovThreatEnd;
-	}
+    if (hTimer_MolotovThreatEnd != null)
+    {
+        delete hTimer_MolotovThreatEnd;
+    }
+
+    return Plugin_Continue;
 }
 
 public Action Event_BombPlanted(Handle event, const char[] name, bool dontBroadcast)
 {
     g_c4PlantTime = GetGameTime();
+
+    return Plugin_Continue;
 }
 
 public Action Event_BombBeginDefuse(Handle event, const char[] name, bool dontBroadcast)
 {
-	if (g_bAlreadyComplete)
-	{
-		return Plugin_Handled;
-	}
+    if (g_bAlreadyComplete)
+    {
+        return Plugin_Handled;
+    }
 
-	RequestFrame(Event_BombBeginDefusePlusFrame, GetEventInt(event, "userid"));
+    RequestFrame(Event_BombBeginDefusePlusFrame, GetEventInt(event, "userid"));
 
-	return Plugin_Continue;
+    return Plugin_Continue;
 }
 
 public void Event_BombBeginDefusePlusFrame(int userId)
 {
-	g_bWouldMakeIt = false;
+    g_bWouldMakeIt = false;
 
-	int client = GetClientOfUserId(userId);
+    int client = GetClientOfUserId(userId);
 
-	if (IsValidClient(client))
+    if (IsClientValid(client))
     {
-    	AttemptInstantDefuse(client);
+        AttemptInstantDefuse(client);
     }
 }
 
-void AttemptInstantDefuse(int client, int exemptNade = 0)
+void AttemptInstantDefuse(int client)
 {
-	if (g_bAlreadyComplete || !GetEntProp(client, Prop_Send, "m_bIsDefusing") || HasAlivePlayer(CS_TEAM_T))
-	{
-		return;
-	}
+    if (g_bAlreadyComplete || !GetEntProp(client, Prop_Send, "m_bIsDefusing") || HasAlivePlayer(CS_TEAM_T))
+    {
+        // PrintToChatAll("%s Can't instant defuse. Ts still alive.", MESSAGE_PREFIX);
+        return;
+    }
 
-	int StartEnt = MaxClients + 1;
+    int StartEnt = MaxClients + 1;
 
-	int c4 = FindEntityByClassname(StartEnt, "planted_c4");
+    int c4 = FindEntityByClassname(StartEnt, "planted_c4");
 
-	if (c4 == -1)
-	{
-	    return;
-	}
+    if (c4 == -1)
+    {
+        return;
+    }
 
-	bool hasDefuseKit = HasDefuseKit(client);
-	float c4TimeLeft = GetConVarFloat(FindConVar("mp_c4timer")) - (GetGameTime() - g_c4PlantTime);
+    bool hasDefuseKit = HasDefuseKit(client);
+    float c4TimeLeft = GetConVarFloat(FindConVar("mp_c4timer")) - (GetGameTime() - g_c4PlantTime);
 
-	if (!g_bWouldMakeIt)
-	{
-		g_bWouldMakeIt = (c4TimeLeft >= 10.0 && !hasDefuseKit) || (c4TimeLeft >= 5.0 && hasDefuseKit);
-	}
+    g_bWouldMakeIt = (c4TimeLeft >= 10.0 && !hasDefuseKit) || (c4TimeLeft >= 5.0 && hasDefuseKit);
 
-	if (GetConVarInt(hEndIfTooLate) == 1 && !g_bWouldMakeIt)
-	{
-		if (!OnInstandDefusePre(client, c4))
-		{
-			return;
-		}
+    if (!g_bWouldMakeIt)
+    {
+        if (GetConVarInt(hEndIfTooLate) != 1) 
+        {
+            return;
+        }
+        
+        if (!OnInstantDefusePre(client, c4))
+        {
+            return;
+        }
 
-		for (int i = 0; i <= MaxClients; i++)
-    	{
-    		if (IsValidClient(i))
-    		{
-	    		PrintToChat(i, "%T", "InstaDefuseUnsuccessful", i, MESSAGE_PREFIX, c4TimeLeft);
-    		}
-    	}
+        PrintToChatAll("%s CT can't defuse in time. Ts win", MESSAGE_PREFIX);
 
-		g_bAlreadyComplete = true;
+        g_bAlreadyComplete = true;
 
-		// Force Terrorist win because they do not have enough time to defuse the bomb.
-		EndRound(CS_TEAM_T);
+        // Force Terrorist win because they do not have enough time to defuse the bomb.
+        EndRound(CS_TEAM_T);
 
-		return;
-	}
-	else if (GetConVarInt(hDefuseIfTime) != 1 || GetEntityFlags(client) && !FL_ONGROUND)
-	{
-		return;
-	}
+        return;
+    }
+    else if (GetConVarInt(hDefuseIfTime) != 1 || GetEntityFlags(client) && !FL_ONGROUND)
+    {
+        return;
+    }
 
-	int ent;
-	if ((ent = FindEntityByClassname(StartEnt, "hegrenade_projectile")) != -1 || (ent = FindEntityByClassname(StartEnt, "molotov_projectile")) != -1)
-	{
-	    if (ent != exemptNade)
-	    {
-	    	for (int i = 0; i <= MaxClients; i++)
-	    	{
-	    		if (IsValidClient(i))
-	    		{
-		    		PrintToChat(i, "%T", "LiveNadeSomewhere", i, MESSAGE_PREFIX);
-	    		}
-	    	}
+    if (FindEntityByClassname(StartEnt, "hegrenade_projectile") != -1 || FindEntityByClassname(StartEnt, "molotov_projectile") != -1)
+    {
+        PrintToChatAll("%s Can't instant defuse. There's an active nade/molly.", MESSAGE_PREFIX);
+        return;
+    }
+    else if (hTimer_MolotovThreatEnd != null)
+    {
+        PrintToChatAll("%s Can't instant defuse. There's an active molly.", MESSAGE_PREFIX);
+        return;
+    }
+    
+    if (!OnInstantDefusePre(client, c4))
+    {
+        return;
+    }
 
-	        return;
-	    }
-	}
-	else if (hTimer_MolotovThreatEnd != null)
-	{
-	    for (int i = 0; i <= MaxClients; i++)
-    	{
-    		if (IsValidClient(i))
-    		{
-	    		PrintToChat(i, "%T", "MolotovTooClose", i, MESSAGE_PREFIX);
-    		}
-    	}
+    PrintToChatAll("%s CTs instant defused with %f seconds remaining.", MESSAGE_PREFIX, c4TimeLeft);
 
-	    return;
-	}
+    g_bAlreadyComplete = true;
 
-	if (!OnInstandDefusePre(client, c4))
-	{
-		return;
-	}
+    EndRound(CS_TEAM_CT);
 
-	for (int i = 0; i <= MaxClients; i++)
-	{
-		if (IsValidClient(i))
-		{
-			PrintToChat(i, "%T", "InstaDefuseSuccessful", i, MESSAGE_PREFIX, c4TimeLeft);
-		}
-	}
-
-	g_bAlreadyComplete = true;
-
-	EndRound(CS_TEAM_CT);
-
-	OnInstantDefusePost(client, c4);
+    OnInstantDefusePost(client, c4);
 }
 
 public Action Event_AttemptInstantDefuse(Handle event, const char[] name, bool dontBroadcast)
 {
     int defuser = GetDefusingPlayer();
 
-    int ent = 0;
-
     if (StrContains(name, "detonate") != -1 && defuser != 0)
     {
-        ent = GetEventInt(event, "entityid");
-
-        AttemptInstantDefuse(defuser, ent);
+        AttemptInstantDefuse(defuser);
     }
+
+    return Plugin_Continue;
 }
 
 public Action Event_MolotovDetonate(Handle event, const char[] name, bool dontBroadcast)
@@ -219,7 +195,7 @@ public Action Event_MolotovDetonate(Handle event, const char[] name, bool dontBr
 
     if (c4 == -1)
     {
-        return;
+        return Plugin_Continue;
     }
 
     float C4Origin[3];
@@ -227,7 +203,7 @@ public Action Event_MolotovDetonate(Handle event, const char[] name, bool dontBr
 
     if (GetVectorDistance(Origin, C4Origin, false) > 150)
     {
-        return;
+        return Plugin_Continue;
     }
 
     if (hTimer_MolotovThreatEnd != null)
@@ -236,6 +212,8 @@ public Action Event_MolotovDetonate(Handle event, const char[] name, bool dontBr
     }
 
     hTimer_MolotovThreatEnd = CreateTimer(GetConVarFloat(hInfernoDuration), Timer_MolotovThreatEnd, _, TIMER_FLAG_NO_MAPCHANGE);
+
+    return Plugin_Continue;
 }
 
 public Action Timer_MolotovThreatEnd(Handle timer)
@@ -248,16 +226,18 @@ public Action Timer_MolotovThreatEnd(Handle timer)
     {
         AttemptInstantDefuse(defuser);
     }
+
+    return Plugin_Continue;
 }
 
 void OnInstantDefusePost(int client, int c4)
 {
-	Call_StartForward(fw_OnInstantDefusePost);
+    Call_StartForward(fw_OnInstantDefusePost);
 
-	Call_PushCell(client);
-	Call_PushCell(c4);
+    Call_PushCell(client);
+    Call_PushCell(c4);
 
-	Call_Finish();
+    Call_Finish();
 }
 
 void EndRound(int team, bool waitFrame = true)
@@ -296,7 +276,7 @@ stock int GetDefusingPlayer()
 {
     for (int i = 1; i <= MaxClients; i++)
     {
-        if (IsValidClient(i) && IsPlayerAlive(i) && GetEntProp(i, Prop_Send, "m_bIsDefusing"))
+        if (IsClientValid(i) && IsPlayerAlive(i) && GetEntProp(i, Prop_Send, "m_bIsDefusing"))
         {
             return i;
         }
@@ -305,29 +285,29 @@ stock int GetDefusingPlayer()
     return 0;
 }
 
-stock bool OnInstandDefusePre(int client, int c4)
+stock bool OnInstantDefusePre(int client, int c4)
 {
-	Action response;
+    Action response;
 
-	Call_StartForward(fw_OnInstantDefusePre);
-	Call_PushCell(client);
-	Call_PushCell(c4);
-	Call_Finish(response);
+    Call_StartForward(fw_OnInstantDefusePre);
+    Call_PushCell(client);
+    Call_PushCell(c4);
+    Call_Finish(response);
 
-	return !(response != Plugin_Continue && response != Plugin_Changed);
+    return !(response != Plugin_Continue && response != Plugin_Changed);
 }
 
 bool HasDefuseKit(int client)
 {
-	bool hasDefuseKit = GetEntProp(client, Prop_Send, "m_bHasDefuser") == 1;
-	return hasDefuseKit;
+    bool hasDefuseKit = GetEntProp(client, Prop_Send, "m_bHasDefuser") == 1;
+    return hasDefuseKit;
 }
 
 stock bool HasAlivePlayer(int team)
 {
     for (int i = 1; i <= MaxClients; i++)
     {
-        if (IsValidClient(i) && IsPlayerAlive(i) && GetClientTeam(i) == team)
+        if (IsClientValid(i) && IsPlayerAlive(i) && GetClientTeam(i) == team)
         {
             return true;
         }
@@ -336,7 +316,7 @@ stock bool HasAlivePlayer(int team)
     return false;
 }
 
-stock bool IsValidClient(int client)
+stock bool IsClientValid(int client)
 {
-    return client > 0 && client <= MaxClients && IsClientInGame(client) && !IsFakeClient(client);
+    return client > 0 && client <= MaxClients && IsClientInGame(client) && !IsClientSourceTV(client);
 }
